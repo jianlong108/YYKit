@@ -75,6 +75,7 @@ typedef NS_ENUM(NSUInteger, YYImageBlendOperation) {
 };
 
 /**
+ 图像帧对象
  An image frame object.
  */
 @interface YYImageFrame : NSObject <NSCopying>
@@ -94,10 +95,12 @@ typedef NS_ENUM(NSUInteger, YYImageBlendOperation) {
 #pragma mark - Decoder
 
 /**
+ 图片解码器。
  An image decoder to decode image data.
- 
+ 支持webP，apng，gif和系统支持的png，jpg，jp2，bmp，tiff，pic，icns和ico
  @discussion This class supports decoding animated WebP, APNG, GIF and system
- image format such as PNG, JPG, JP2, BMP, TIFF, PIC, ICNS and ICO. It can be used 
+ image format such as PNG, JPG, JP2, BMP, TIFF, PIC, ICNS and ICO. It can be used
+ 它不仅支持一个具有完整数据的图片。还支持下载过程中，增量式图片数据。且是线程安全的
  to decode complete image data, or to decode incremental image data during image 
  download. This class is thread-safe.
  
@@ -137,7 +140,7 @@ typedef NS_ENUM(NSUInteger, YYImageBlendOperation) {
 
 /**
  Creates an image decoder.
- 
+ 图片比例  一般为屏幕比例
  @param scale  Image's scale.
  @return An image decoder.
  */
@@ -145,11 +148,13 @@ typedef NS_ENUM(NSUInteger, YYImageBlendOperation) {
 
 /**
  Updates the incremental image with new data.
- 
+ 通过新的图片数据 更新增量图片
+ 当正在解码时，不能在其他线程改变数据
  @discussion You can use this method to decode progressive/interlaced/baseline
  image when you do not have the complete image data. The `data` was retained by
  decoder, you should not modify the data in other thread during decoding.
  
+ 每次调用这个方法前，传入的参数，必须是截止到目前所有累加的图像数据
  @param data  The data to add to the image decoder. Each time you call this 
  function, the 'data' parameter must contain all of the image file data 
  accumulated so far.

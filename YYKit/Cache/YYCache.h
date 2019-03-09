@@ -13,6 +13,7 @@
 
 @class YYMemoryCache, YYDiskCache;
 
+//使用NS_ASSUME_NONNULL_BEGIN来通过编译器层检测入参是否为空并给予警告
 NS_ASSUME_NONNULL_BEGIN
 
 /**
@@ -36,7 +37,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Create a new instance with the specified name.
  Multiple instances with the same name will make the cache unstable.
- 
+ ￥￥注意 ：多个实例共用一个名字，会使缓存不稳定
  @param name  The name of the cache. It will create a dictionary with the name in
      the app's caches dictionary for disk cache. Once initialized you should not 
      read and write to this directory.
@@ -46,8 +47,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  Create a new instance with the specified path.
- Multiple instances with the same name will make the cache unstable.
- 
+ Multiple instances with the same path will make the cache unstable.
+ ￥￥注意 ：多个实例共用一个路径，会使缓存不稳定
  @param path  Full path of a directory in which the cache will write data.
      Once initialized you should not read and write to this directory.
  @result A new cache object, or nil if an error occurs.
@@ -88,7 +89,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Returns a boolean value that indicates whether a given key is in cache.
  This method may blocks the calling thread until file read finished.
- 
+ ￥￥该方法可能会被block，直到文件读取完成
  @param key A string identifying the value. If nil, just return NO.
  @return Whether the key is in cache.
  */
@@ -98,7 +99,7 @@ NS_ASSUME_NONNULL_BEGIN
  Returns a boolean value with the block that indicates whether a given key is in cache.
  This method returns immediately and invoke the passed block in background queue
  when the operation finished.
- 
+ ￥￥该方法立刻返回，但是会在后台线程回调block，直到操作完成
  @param key   A string identifying the value. If nil, just return NO.
  @param block A block which will be invoked in background queue when finished.
  */
@@ -107,7 +108,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Returns the value associated with a given key.
  This method may blocks the calling thread until file read finished.
- 
+ ￥￥这个方法将会block住调用线程 直到文件读取完成
  @param key A string identifying the value. If nil, just return nil.
  @return The value associated with key, or nil if no value is associated with key.
  */
@@ -117,7 +118,7 @@ NS_ASSUME_NONNULL_BEGIN
  Returns the value associated with a given key.
  This method returns immediately and invoke the passed block in background queue
  when the operation finished.
- 
+ ￥￥通过指定的block在后台线程将数据返回
  @param key A string identifying the value. If nil, just return nil.
  @param block A block which will be invoked in background queue when finished.
  */
@@ -126,7 +127,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  Sets the value of the specified key in the cache.
  This method may blocks the calling thread until file write finished.
- 
+ ￥￥这个方法可能会被阻塞直到文件写入完成
  @param object The object to be stored in the cache. If nil, it calls `removeObjectForKey:`.
  @param key    The key with which to associate the value. If nil, this method has no effect.
  */

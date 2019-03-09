@@ -14,6 +14,16 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /**
+ YYDiskCache 是一个线程安全的磁盘缓存，用于存储由 SQLite 和文件系统支持的键值对（类似于 NSURLCache 的磁盘缓存）。
+
+ YYDiskCache 具有以下功能：
+ 它使用 LRU(least-recently-used) 来删除对象。
+ 支持按 cost，count 和 age 进行控制。
+ 它可以被配置为当没有可用的磁盘空间时自动驱逐缓存对象。
+ 它可以自动抉择每个缓存对象的存储类型（sqlite/file）以便提供更好的性能表现。
+ 
+ Note: 您可以编译最新版本的 sqlite 并忽略 iOS 系统中的 libsqlite3.dylib 来获得 2x〜4x 的速度提升。
+ 
  YYDiskCache is a thread-safe cache that stores key-value pairs backed by SQLite
  and file system (similar to NSURLCache's disk cache).
  
@@ -42,6 +52,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readonly) NSString *path;
 
 /**
+ ￥￥ 阈值，大于阈值则存储类型为 file；否则存储类型为 sqlite 默认值20kb
  If the object's data size (in bytes) is larger than this value, then object will
  be stored as a file, otherwise the object will be stored in sqlite.
  
@@ -53,6 +64,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (readonly) NSUInteger inlineThreshold;
 
 /**
+  用来替换 NSKeyedArchiver，你可以使用该代码块以支持没有 conform `NSCoding` 协议的对象
  If this block is not nil, then the block will be used to archive object instead
  of NSKeyedArchiver. You can use this block to support the objects which do not
  conform to the `NSCoding` protocol.
@@ -62,6 +74,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nullable, copy) NSData *(^customArchiveBlock)(id object);
 
 /**
+ 用来替换 NSKeyedUnarchiver，你可以使用该代码块以支持没有 conform `NSCoding` 协议的对象
  If this block is not nil, then the block will be used to unarchive object instead
  of NSKeyedUnarchiver. You can use this block to support the objects which do not
  conform to the `NSCoding` protocol.
@@ -71,6 +84,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nullable, copy) id (^customUnarchiveBlock)(NSData *data);
 
 /**
+ 当一个对象将以 file 的形式保存时，该代码块用来生成指定文件名。如果为 nil，则默认使用 md5(key) 作为文件名
  When an object needs to be saved as a file, this block will be invoked to generate
  a file name for a specified key. If the block is nil, the cache use md5(key) as 
  default file name.
@@ -115,7 +129,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The minimum free disk space (in bytes) which the cache should kept.
- 
+ 缓存应该保留的最小可用磁盘空间（以字节为单位），默认无限制，超过限制则会在后台逐出一些对象以满足限制
  @discussion The default value is 0, which means no limit.
  If the free disk space is lower than this value, the cache will remove objects
  to free some disk space. This is not a strict limit—if the free disk space goes
@@ -125,13 +139,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The auto trim check time interval in seconds. Default is 60 (1 minute).
- 
+ 缓存自动清理时间间隔，默认 60s
  @discussion The cache holds an internal timer to check whether the cache reaches
  its limits, and if the limit is reached, it begins to evict objects.
  */
 @property NSTimeInterval autoTrimInterval;
 
 /**
+ 是否开启错误日志
  Set `YES` to enable error logs for debug.
  */
 @property BOOL errorLogsEnabled;

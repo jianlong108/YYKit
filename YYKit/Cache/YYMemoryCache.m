@@ -30,16 +30,23 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
 #endif
 
 /**
+ _YYLinkedMap 中的一个节点。
+ 
+ ￥￥ 通常情况下我们不应该使用这个类。
  A node in linked map.
  Typically, you should not use this class directly.
  */
 @interface _YYLinkedMapNode : NSObject {
     @package
+    //__unsafe_unretained 是为了性能优化，节点被 _YYLinkedMap 的 _dic 强引用
     __unsafe_unretained _YYLinkedMapNode *_prev; // retained by dic
     __unsafe_unretained _YYLinkedMapNode *_next; // retained by dic
+    //我们可以把 _YYLinkedMapNode 理解为 YYMemoryCache 中的一个缓存对象。
     id _key;
     id _value;
+    // 记录开销，对应 YYMemoryCache 提供的 cost 控制
     NSUInteger _cost;
+    // 记录时间，对应 YYMemoryCache 提供的 age 控制
     NSTimeInterval _time;
 }
 @end
@@ -49,6 +56,11 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
 
 
 /**
+ YYMemoryCache 内的一个链表。
+ 
+ _YYLinkedMap 不是一个线程安全的类，而且它也不对参数做校验。
+ 
+ 通常情况下我们不应该使用这个类。
  A linked map used by YYMemoryCache.
  It's not thread-safe and does not validate the parameters.
  
@@ -56,12 +68,18 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
  */
 @interface _YYLinkedMap : NSObject {
     @package
+     // 不要直接设置该对象
+    //_YYLinkedMap 作为由 _YYLinkedMapNode 节点组成的双向链表，使用 CFMutableDictionaryRef _dic 字典存储 _YYLinkedMapNode。这样在确保 _YYLinkedMapNode 被强引用的同时，能够利用字典的 Hash 快速定位用户要访问的缓存对象，这样既符合了键值缓存的概念又省去了自己实现的麻烦
     CFMutableDictionaryRef _dic; // do not set object directly
     NSUInteger _totalCost;
     NSUInteger _totalCount;
+     // MRU, 最常用节点，不要直接修改它
     _YYLinkedMapNode *_head; // MRU, do not change it directly
+    // LRU, 最少用节点，不要直接修改它
     _YYLinkedMapNode *_tail; // LRU, do not change it directly
+    // 对应 YYMemoryCache 的 releaseOnMainThread
     BOOL _releaseOnMainThread;
+     // 对应 YYMemoryCache 的 releaseAsynchronously
     BOOL _releaseAsynchronously;
 }
 
@@ -182,8 +200,11 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
 
 
 @implementation YYMemoryCache {
+    // 线程锁，旨在保证 YYMemoryCache 线程安全
     pthread_mutex_t _lock;
+    // _YYLinkedMap，YYMemoryCache 通过它间接操作缓存对象
     _YYLinkedMap *_lru;
+    // 串行队列，用于 YYMemoryCache 的 trim 操作
     dispatch_queue_t _queue;
 }
 
@@ -219,6 +240,12 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
     
     NSMutableArray *holder = [NSMutableArray new];
     while (!finish) {
+        /*
+         不妨思考这样一个问题：为何要使用pthread_mutex_trylock()方法尝试获取锁，而获取失败过后做了一个线程挂起操作usleep()？
+         优先级反转：比如两个线程 A 和 B，优先级 A < B。当 A 获取锁访问共享资源时，B 尝试获取锁，那么 B 就会进入忙等状态，忙等时间越长对 CPU 资源的占用越大；而由于 A 的优先级低于 B，A 无法与高优先级的线程争夺 CPU 资源，从而导致任务迟迟完成不了。解决优先级反转的方法有“优先级天花板”和“优先级继承”，它们的核心操作都是提升当前正在访问共享资源的线程的优先级。
+         历史情况：在老版本的代码中，作者是使用的OSSpinLock自旋锁来保证线程安全，而后来由于OSSpinLock的 bug 问题（存在潜在的优先级反转BUG），作者将其替换成了pthread_mutex_t互斥锁。
+         */
+        //当锁住当前线程时
         if (pthread_mutex_trylock(&_lock) == 0) {
             if (_lru->_totalCost > costLimit) {
                 _YYLinkedMapNode *node = [_lru removeTailNode];
@@ -228,6 +255,8 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
             }
             pthread_mutex_unlock(&_lock);
         } else {
+            // 使用 usleep 以微秒为单位挂起线程，在短时间间隔挂起线程
+            // 对比 sleep 用 usleep 能更好的利用 CPU 时间
             usleep(10 * 1000); //10 ms
         }
     }
@@ -407,6 +436,7 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
     if (!key) return nil;
     pthread_mutex_lock(&_lock);
     _YYLinkedMapNode *node = CFDictionaryGetValue(_lru->_dic, (__bridge const void *)(key));
+    //LRU算法的精髓：将最近用到的对象放到链表的表头，这样在清理对象时，从表尾开始清理
     if (node) {
         node->_time = CACurrentMediaTime();
         [_lru bringNodeToHead:node];
@@ -429,6 +459,7 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
     _YYLinkedMapNode *node = CFDictionaryGetValue(_lru->_dic, (__bridge const void *)(key));
     NSTimeInterval now = CACurrentMediaTime();
     if (node) {
+        //之前key对应的有缓存对象时，就将此缓缓存的消耗设置0，且挪到表头
         _lru->_totalCost -= node->_cost;
         _lru->_totalCost += cost;
         node->_cost = cost;
@@ -443,11 +474,13 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
         node->_value = object;
         [_lru insertNodeAtHead:node];
     }
+    //当设置完新对象后的链表总消耗，超过了之前设置的阀值，将从表尾开始清理对象
     if (_lru->_totalCost > _costLimit) {
         dispatch_async(_queue, ^{
             [self trimToCost:_costLimit];
         });
     }
+     //当设置完新对象后的链表总对象数量，超过了之前设置的阀值，将从表尾开始清理对象
     if (_lru->_totalCount > _countLimit) {
         _YYLinkedMapNode *node = [_lru removeTailNode];
         if (_lru->_releaseAsynchronously) {
@@ -471,12 +504,15 @@ static inline dispatch_queue_t YYMemoryCacheGetReleaseQueue() {
     if (node) {
         [_lru removeNode:node];
         if (_lru->_releaseAsynchronously) {
+            //后台线程释放对象：  把对象捕获到 block 中，然后扔到后台队列去随便发送个消息以避免编译器警告，就可以让对象在后台线程销毁了
             dispatch_queue_t queue = _lru->_releaseOnMainThread ? dispatch_get_main_queue() : YYMemoryCacheGetReleaseQueue();
             dispatch_async(queue, ^{
+                //此时给node对象发送class消息，就是为了将其释放。
                 [node class]; //hold and release in queue
             });
         } else if (_lru->_releaseOnMainThread && !pthread_main_np()) {
             dispatch_async(dispatch_get_main_queue(), ^{
+                //此时给node对象发送class消息，就是为了将其释放。
                 [node class]; //hold and release in queue
             });
         }

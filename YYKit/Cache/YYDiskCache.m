@@ -32,10 +32,15 @@ static int64_t _YYDiskSpaceFree() {
 }
 
 
-/// weak reference for all instances
-static NSMapTable *_globalInstances;
-static dispatch_semaphore_t _globalInstancesLock;
 
+/// weak reference for all instances
+static NSMapTable *_globalInstances;//引用管理所有的 YYDiskCache 实例
+static dispatch_semaphore_t _globalInstancesLock;// 使用 dispatch_semaphore 保障 NSMapTable 线程安全
+
+
+/**
+ 初始化全局map，保证map线程安全 锁
+ */
 static void _YYDiskCacheInitGlobal() {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -44,6 +49,9 @@ static void _YYDiskCacheInitGlobal() {
     });
 }
 
+/**
+ 通过path路径获取YYDiskCache对象引用
+ */
 static YYDiskCache *_YYDiskCacheGetGlobal(NSString *path) {
     if (path.length == 0) return nil;
     _YYDiskCacheInitGlobal();
@@ -61,14 +69,39 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     dispatch_semaphore_signal(_globalInstancesLock);
 }
 
+/*
+ dispatch_semaphore是GCD用来同步的一种方式，与他相关的共有三个函数，分别是
+ 
+ dispatch_semaphore_create：定义信号量
+ dispatch_semaphore_signal：使信号量+1
+ dispatch_semaphore_wait：使信号量-1
+ 
+ 当信号量为0时，就会做等待处理，这时如果 其他线程如果访问的话就会让其等待。所以如果信号量在最开始的的时候被设置为1，那么就可以实现“锁”的功能：
+ 
+ 
+ 加锁： 执行某段代码之前，执行dispatch_semaphore_wait函数，让信号量-1变为0，执行这段代码。 此时如果其他线程过来访问这段代码，就要让其等待。
 
+ 解锁： 当这段代码在当前线程结束以后，执行dispatch_semaphore_signal函数，令信号量再次+1，那么如果有正在等待的线程就可以访问了。
+ 
+ 需要注意的是：如果有多个线程等待，那么后来信号量恢复以后访问的顺序就是线程遇到dispatch_semaphore_wait的顺序。
+ 
+ 
+ 这也就是信号量和互斥锁的一个区别：互斥量用于线程的互斥，信号线用于线程的同步。
+
+ 互斥：是指某一资源同时只允许一个访问者对其进行访问，具有唯一性和排它性。但互斥无法限制访问者对资源的访问顺序，即访问是无序的。
+ 
+ 同步：是指在互斥的基础上（大多数情况），通过其它机制实现访问者对资源的有序访问。在大多数情况下，同步已经实现了互斥，特别是所有写入资源的情况必定是互斥的。也就是说使用信号量可以使多个线程有序访问某个资源。
+ 
+ */
 
 @implementation YYDiskCache {
     YYKVStorage *_kv;
+    //dispatch_semaphore 是信号量，但当信号总量设为 1 时也可以当作锁来。在没有等待情况出现时，它的性能比 pthread_mutex 还要高，但一旦有等待情况出现时，性能就会下降许多。相对于 OSSpinLock 来说，它的优势在于等待时不会消耗 CPU 资源。对磁盘缓存来说，它比较合适。
     dispatch_semaphore_t _lock;
     dispatch_queue_t _queue;
 }
 
+//初始化成功后，立刻开启递归清理对象
 - (void)_trimRecursively {
     __weak typeof(self) _self = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(_autoTrimInterval * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
@@ -78,7 +111,7 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
         [self _trimRecursively];
     });
 }
-
+//在三个维度的评审上清理数据
 - (void)_trimInBackground {
     __weak typeof(self) _self = self;
     dispatch_async(_queue, ^{
@@ -162,6 +195,7 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     self = [super init];
     if (!self) return nil;
     
+    // 先从 NSMapTable 单例中根据 path 获取 YYDiskCache 实例，如果获取到就直接返回该实例,没有获取到则初始化一个 YYDiskCache 实例
     YYDiskCache *globalCache = _YYDiskCacheGetGlobal(path);
     if (globalCache) return globalCache;
     
@@ -188,9 +222,11 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     _freeDiskSpaceLimit = 0;
     _autoTrimInterval = 60;
     
+    //开启递归清理，会根据 _autoTrimInterval 对 YYDiskCache trim
     [self _trimRecursively];
     _YYDiskCacheSetGlobal(self);
     
+    //监听app将要termiate通知
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_appWillBeTerminated) name:UIApplicationWillTerminateNotification object:nil];
     return self;
 }
@@ -269,6 +305,7 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     if (!value) return;
     NSString *filename = nil;
     if (_kv.type != YYKVStorageTypeSQLite) {
+        //如果长度大临界值，则生成文件名称，使得filename不为nil
         if (value.length > _inlineThreshold) {
             filename = [self _filenameForKey:key];
         }

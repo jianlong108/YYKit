@@ -14,6 +14,12 @@
 NS_ASSUME_NONNULL_BEGIN
 
 /**
+ YYMemoryCache 是一个高速的内存缓存，用于存储键值对。它与 NSDictionary 相反，Key 被保留并且不复制。API 和性能类似于 NSCache，所有方法都是线程安全的。
+ YYMemoryCache 对象与 NSCache 的不同之处在于：
+ YYMemoryCache 使用 LRU(least-recently-used) 算法来驱逐对象；NSCache 的驱逐方式是非确定性的。
+ YYMemoryCache 提供 age、cost、count 三种方式控制缓存；NSCache 的控制方式是不精确的。
+ YYMemoryCache 可以配置为在收到内存警告或者 App 进入后台时自动逐出对象。
+ 
  YYMemoryCache is a fast in-memory cache that stores key-value pairs.
  In contrast to NSDictionary, keys are retained and not copied.
  The API and performance is similar to `NSCache`, all methods are thread-safe.
@@ -38,10 +44,10 @@ NS_ASSUME_NONNULL_BEGIN
 /** The name of the cache. Default is nil. */
 @property (nullable, copy) NSString *name;
 
-/** The number of objects in the cache (read-only) */
+/** The number of objects in the cache (read-only) 缓存对象的总数量*/
 @property (readonly) NSUInteger totalCount;
 
-/** The total cost of objects in the cache (read-only). */
+/** The total cost of objects in the cache (read-only). 缓存对象的总开销*/
 @property (readonly) NSUInteger totalCost;
 
 
@@ -52,7 +58,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The maximum number of objects the cache should hold.
- 
+ ￥￥缓存对象数量限制，默认无限制，超过限制则会在后台逐出一些对象以满足限制
  @discussion The default value is NSUIntegerMax, which means no limit.
  This is not a strict limit—if the cache goes over the limit, some objects in the
  cache could be evicted later in backgound thread.
@@ -61,7 +67,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The maximum total cost that the cache can hold before it starts evicting objects.
- 
+ ￥￥ 缓存开销数量限制，默认无限制，超过限制则会在后台逐出一些对象以满足限制
  @discussion The default value is NSUIntegerMax, which means no limit.
  This is not a strict limit—if the cache goes over the limit, some objects in the
  cache could be evicted later in backgound thread.
@@ -70,7 +76,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The maximum expiry time of objects in cache.
- 
+ ￥￥缓存时间限制，默认无限制，超过限制则会在后台逐出一些对象以满足限制
  @discussion The default value is DBL_MAX, which means no limit.
  This is not a strict limit—if an object goes over the limit, the object could 
  be evicted later in backgound thread.
@@ -79,7 +85,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  The auto trim check time interval in seconds. Default is 5.0.
- 
+ ￥￥缓存自动清理时间间隔，默认 5s
  @discussion The cache holds an internal timer to check whether the cache reaches 
  its limits, and if the limit is reached, it begins to evict objects.
  */
@@ -88,22 +94,26 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  If `YES`, the cache will remove all objects when the app receives a memory warning.
  The default value is `YES`.
+ ￥￥是否应该在收到内存警告时删除所有缓存内对象
  */
 @property BOOL shouldRemoveAllObjectsOnMemoryWarning;
 
 /**
  If `YES`, The cache will remove all objects when the app enter background.
  The default value is `YES`.
+ ￥￥是否应该在 App 进入后台时删除所有缓存内对象
  */
 @property BOOL shouldRemoveAllObjectsWhenEnteringBackground;
 
 /**
+ ￥￥内部注册了内存警告通知，当收到内存警告时，可以自定义操作
  A block to be executed when the app receives a memory warning.
  The default value is nil.
  */
 @property (nullable, copy) void(^didReceiveMemoryWarningBlock)(YYMemoryCache *cache);
 
 /**
+ ￥￥内部注册了进入后台通知，当收到内存警告时，可以自定义操作
  A block to be executed when the app enter background.
  The default value is nil.
  */
@@ -112,7 +122,7 @@ NS_ASSUME_NONNULL_BEGIN
 /**
  If `YES`, the key-value pair will be released on main thread, otherwise on
  background thread. Default is NO.
- 
+ ￥￥是否在主线程释放对象，默认 NO，有些对象（例如 UIView/CALayer）应该在主线程释放
  @discussion You may set this value to `YES` if the key-value object contains
  the instance which should be released in main thread (such as UIView/CALayer).
  */
@@ -122,6 +132,7 @@ NS_ASSUME_NONNULL_BEGIN
  If `YES`, the key-value pair will be released asynchronously to avoid blocking 
  the access methods, otherwise it will be released in the access method  
  (such as removeObjectForKey:). Default is YES.
+ ￥￥是否异步释放对象，默认 YES
  */
 @property BOOL releaseAsynchronously;
 
@@ -184,10 +195,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark - Trim
 ///=============================================================================
-/// @name Trim
+/// @name Trim 修剪、整理
 ///=============================================================================
 
 /**
+ ￥￥用 LRU 算法删除对象，直到 totalCount <= count
  Removes objects from the cache with LRU, until the `totalCount` is below or equal to
  the specified value.
  @param count  The total count allowed to remain after the cache has been trimmed.
@@ -195,6 +207,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)trimToCount:(NSUInteger)count;
 
 /**
+ ￥￥ 用 LRU 算法删除对象，直到 totalCost <= cost
  Removes objects from the cache with LRU, until the `totalCost` is or equal to
  the specified value.
  @param cost The total cost allowed to remain after the cache has been trimmed.
@@ -202,6 +215,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)trimToCost:(NSUInteger)cost;
 
 /**
+ ￥￥ 用 LRU 算法删除对象，直到所有到期对象全部被删除
  Removes objects from the cache with LRU, until all expiry objects removed by the
  specified value.
  @param age  The maximum age (in seconds) of objects.

@@ -54,6 +54,18 @@ static NSString *const kTrashDirectoryName = @"trash";
     primary key(key)
  ); 
  create index if not exists last_access_time_idx on manifest(last_access_time);
+ 
+ YYDiskCache的磁盘缓存处理性能非常优越，作者测试了数据库和文件存储的读写效率：iPhone 6 64G 下，SQLite 写入性能比直接写文件要高，但读取性能取决于数据大小：当单条数据小于 20K 时，数据越小 SQLite 读取性能越高；单条数据大于 20K 时，直接写为文件速度会更快一些。
+ 
+ 
+ 如何实现 SQLite 结合文件存储
+ 这一个重点问题，就像之前说的，在某个临界值时，直接读取文件的效率要高于从数据库读取，第一反应可能是写文件和写数据库分离，也就是上面的结构中，manifest.sqlite 数据库文件和 /data 文件夹内容无关联，让 /data 去存储高于临界值的数据，让 sqlite 去存储低于临界值的数据。
+ 然而这样会带来两个问题：
+ 
+    /data 目录下的缓存数据无法高速查找（可能只有遍历）
+    无法统一管理磁盘缓存
+ 
+ 为了完美处理该问题，作者将它们结合了起来，所有关于用户存储数据的相关信息都会放在数据库中，而待存储数据的二进制文件，却根据情况分别处理：要么存在数据库表的 inline_data 下，要么直接存储在 /data 文件夹下。
  */
 
 @implementation YYKVStorageItem
@@ -68,6 +80,8 @@ static NSString *const kTrashDirectoryName = @"trash";
     NSString *_trashPath;
     
     sqlite3 *_db;
+    //sqlite3_stmt: 该对象的实例表示已经编译成二进制形式并准备执行的单个 SQL 语句。
+    //_dbStmtCache是 YYKVStorage 中的私有成员，它是一个可变字典充当着 sqlite3_stmt 缓存的角色。
     CFMutableDictionaryRef _dbStmtCache;
     NSTimeInterval _dbLastOpenErrorTime;
     NSUInteger _dbOpenErrorCount;
@@ -170,15 +184,23 @@ static NSString *const kTrashDirectoryName = @"trash";
     return result == SQLITE_OK;
 }
 
+/**
+ 这样就可以省去一些重复生成 sqlite3_stmt 的开销。
+ */
 - (sqlite3_stmt *)_dbPrepareStmt:(NSString *)sql {
     if (![self _dbCheck] || sql.length == 0 || !_dbStmtCache) return NULL;
+    
+    // 先尝试从 _dbStmtCache 根据入参 sql 取出已缓存 sqlite3_stmt
     sqlite3_stmt *stmt = (sqlite3_stmt *)CFDictionaryGetValue(_dbStmtCache, (__bridge const void *)(sql));
     if (!stmt) {
+        // 如果没有缓存再从新生成一个 sqlite3_stmt
         int result = sqlite3_prepare_v2(_db, sql.UTF8String, -1, &stmt, NULL);
+        // 生成结果异常则根据错误日志开启标识打印日志
         if (result != SQLITE_OK) {
             if (_errorLogsEnabled) NSLog(@"%s line:%d sqlite stmt prepare error (%d): %s", __FUNCTION__, __LINE__, result, sqlite3_errmsg(_db));
             return NULL;
         }
+        // 生成成功则放入 _dbStmtCache 缓存
         CFDictionarySetValue(_dbStmtCache, (__bridge const void *)(sql), stmt);
     } else {
         sqlite3_reset(stmt);
@@ -612,7 +634,16 @@ static NSString *const kTrashDirectoryName = @"trash";
     NSString *path = [_dataPath stringByAppendingPathComponent:filename];
     return [[NSFileManager defaultManager] removeItemAtPath:path error:NULL];
 }
+/*文件操作的封装
+主要是 NSFileManager 相关方法的基本使用，比较独特的是，作者使用了一个“垃圾箱”，也就是磁盘文件存储结构中的 /trash 目录。
+很容易想到，删除文件是一个比较耗时的操作，所以作者把它放到了一个专门的队列处理。而删除的文件用一个专门的路径 /trash 放置，避免了写入数据和删除数据之间发生冲突。试想，若删除的逻辑和写入的逻辑都是对 /data 目录进行操作，而删除逻辑比较耗时，那么就会很容易出现误删等情况
+*/
 
+/**
+ 将 /data 目录下的文件移动到 /trash 目录下
+
+ @return 文件操作是否成功
+ */
 - (BOOL)_fileMoveAllToTrash {
     CFUUIDRef uuidRef = CFUUIDCreate(NULL);
     CFStringRef uuid = CFUUIDCreateString(NULL, uuidRef);
@@ -626,6 +657,9 @@ static NSString *const kTrashDirectoryName = @"trash";
     return suc;
 }
 
+/**
+ 是将 /trash 目录下的文件在异步线程清理掉
+ */
 - (void)_fileEmptyTrashInBackground {
     NSString *trashPath = _trashPath;
     dispatch_queue_t queue = _trashQueue;
@@ -674,8 +708,10 @@ static NSString *const kTrashDirectoryName = @"trash";
     self = [super init];
     _path = path.copy;
     _type = type;
+    //缓存的data和元数据
     _dataPath = [path stringByAppendingPathComponent:kDataDirectoryName];
     _trashPath = [path stringByAppendingPathComponent:kTrashDirectoryName];
+    //同步队列
     _trashQueue = dispatch_queue_create("com.ibireme.cache.disk.trash", DISPATCH_QUEUE_SERIAL);
     _dbPath = [path stringByAppendingPathComponent:kDBFileName];
     _errorLogsEnabled = YES;
@@ -696,6 +732,7 @@ static NSString *const kTrashDirectoryName = @"trash";
         return nil;
     }
     
+    //作两次校验，如果还不能建立数据库，就返回nil
     if (![self _dbOpen] || ![self _dbInitialize]) {
         // db file may broken...
         [self _dbClose];
@@ -732,22 +769,28 @@ static NSString *const kTrashDirectoryName = @"trash";
         return NO;
     }
     
-    if (filename.length) {
+    if (filename.length) {//如果文件名不为空字符串，说明要进行文件缓存
+        //写入文件
         if (![self _fileWriteWithName:filename data:value]) {
             return NO;
         }
+        ////写入元数据到数据库 ，如果写入失败，则删除对应的文件
         if (![self _dbSaveWithKey:key value:value fileName:filename extendedData:extendedData]) {
             [self _fileDeleteWithName:filename];
             return NO;
         }
         return YES;
-    } else {
+    } else {//如果文件名为空字符串，说明不要进行文件缓存
+
+        //如果缓存类型不是数据库缓存，则查找出相应的文件名并删除
         if (_type != YYKVStorageTypeSQLite) {
+            
             NSString *filename = [self _dbGetFilenameWithKey:key];
             if (filename) {
                 [self _fileDeleteWithName:filename];
             }
         }
+        //如果文件名为空 将缓存的key和对应的data等其他信息存入数据库  filename控制是否将key对应的data写入数据库
         return [self _dbSaveWithKey:key value:value fileName:nil extendedData:extendedData];
     }
 }
@@ -942,12 +985,14 @@ static NSString *const kTrashDirectoryName = @"trash";
 
 - (YYKVStorageItem *)getItemForKey:(NSString *)key {
     if (key.length == 0) return nil;
+    //从数据库中根据key取出 YYKVStorageItem 对象 对应的数据
     YYKVStorageItem *item = [self _dbGetItemWithKey:key excludeInlineData:NO];
     if (item) {
+        //更新内存访问的时间
         [self _dbUpdateAccessTimeWithKey:key];
-        if (item.filename) {
+        if (item.filename) {//如果有文件名，则尝试获取文件数据
             item.value = [self _fileReadWithName:item.filename];
-            if (!item.value) {
+            if (!item.value) {//如果此时获取文件数据失败，则删除对应的item
                 [self _dbDeleteItemWithKey:key];
                 item = nil;
             }

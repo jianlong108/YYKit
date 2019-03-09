@@ -12,8 +12,9 @@
 #import <Foundation/Foundation.h>
 
 NS_ASSUME_NONNULL_BEGIN
-
+//YYKVStorage 等价于 YYMemoryCache 中的双向链表 _YYLinkedMap，而对应于 _YYLinkedMap 中的节点 _YYLinkedMapNode，YYKVStorage 中也有一个类 YYKVStorageItem 充当着与缓存对象一对一的角色。
 /**
+ YYKVStorageItem 是 YYKVStorage 中用来存储键值对和元数据的类
  YYKVStorageItem is used by `YYKVStorage` to store key-value pair and meta data.
  Typically, you should not use this class directly.
  */
@@ -28,6 +29,15 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 /**
+
+ YYDiskCache 是基于 sqlite 和 file 来做的磁盘缓存，我们的缓存对象可以自由的选择存储类型，下面简单对比一下：
+ 
+ sqlite: 对于小数据（例如 NSNumber）的存取效率明显高于 file。
+ 
+ file: 对于较大数据（例如高质量图片）的存取效率优于 sqlite。
+ 
+ 所以 YYDiskCache 使用两者配合，灵活的存储以提高性能。
+
  Storage type, indicated where the `YYKVStorageItem.value` stored.
  
  @discussion Typically, write data to sqlite is faster than extern file, but 
@@ -68,6 +78,8 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  You may compile the latest version of sqlite and ignore the libsqlite3.dylib in
  iOS system to get 2x~4x speed up.
  
+ 这个类的实例是 *非* 线程安全的，你需要确保只有一个线程可以同时访问该实例。如果你真的需要在多线程中处理大量的数据，
+ 应该分割数据到多个 KVStorage 实例（分片）
  @warning The instance of this class is *NOT* thread safe, you need to make sure 
  that there's only one thread to access the instance at the same time. If you really 
  need to process large amounts of data in multi-thread, you should split the data
